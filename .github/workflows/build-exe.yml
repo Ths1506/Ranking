@@ -1,0 +1,69 @@
+name: Build RankingDeFundos.exe
+
+# Roda sozinho quando o código é enviado (upload) para o repositório, e
+# também pode ser disparado manualmente pelo botão "Run workflow" na aba
+# Actions do GitHub, a qualquer momento.
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
+
+      - name: Preparar o Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar as bibliotecas Python
+        run: |
+          pip install pyinstaller pillow pypdf pytesseract playwright
+          python -m playwright install chromium
+        shell: powershell
+
+      - name: Instalar o Tesseract (OCR) e o Poppler (leitor de PDF)
+        run: |
+          choco install tesseract poppler -y --no-progress
+        shell: powershell
+
+      - name: Juntar os binários dentro da pasta do projeto (engine/bin)
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path "engine\bin\tesseract" | Out-Null
+          New-Item -ItemType Directory -Force -Path "engine\bin\poppler" | Out-Null
+          New-Item -ItemType Directory -Force -Path "engine\bin\chromium" | Out-Null
+
+          Copy-Item "C:\Program Files\Tesseract-OCR\*" -Destination "engine\bin\tesseract" -Recurse -Force
+
+          $poppler = Get-ChildItem -Path "C:\ProgramData\chocolatey\lib\poppler" -Recurse -Filter "pdftoppm.exe" | Select-Object -First 1
+          if (-not $poppler) { $poppler = Get-ChildItem -Path "C:\ProgramData\chocolatey" -Recurse -Filter "pdftoppm.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 }
+          Copy-Item "$($poppler.DirectoryName)\*" -Destination "engine\bin\poppler" -Recurse -Force
+
+          $pwCache = "$env:USERPROFILE\AppData\Local\ms-playwright"
+          $chromeDir = Get-ChildItem -Path $pwCache -Directory -Filter "chromium-*" | Select-Object -First 1
+          Copy-Item "$($chromeDir.FullName)\chrome-win\*" -Destination "engine\bin\chromium" -Recurse -Force
+
+      - name: Empacotar o programa (PyInstaller)
+        shell: powershell
+        run: |
+          pyinstaller --onefile --noconsole --name RankingDeFundos `
+            --add-data "assets;assets" `
+            --add-data "engine\bin;bin" `
+            gui.py
+
+      - name: Publicar o .exe pronto (aba Releases do repositório)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Robô de Ranking — build ${{ github.run_number }}
+          files: dist/RankingDeFundos.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

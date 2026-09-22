@@ -48,8 +48,9 @@ jobs:
           Copy-Item "$($poppler.DirectoryName)\*" -Destination "engine\bin\poppler" -Recurse -Force
 
           $pwCache = "$env:USERPROFILE\AppData\Local\ms-playwright"
-          $chromeDir = Get-ChildItem -Path $pwCache -Directory -Filter "chromium-*" | Select-Object -First 1
-          Copy-Item "$($chromeDir.FullName)\chrome-win\*" -Destination "engine\bin\chromium" -Recurse -Force
+          $chromeExe = Get-ChildItem -Path $pwCache -Recurse -Filter "chrome.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $chromeExe) { Write-Error "Não encontrei o chrome.exe do Playwright em $pwCache"; exit 1 }
+          Copy-Item "$($chromeExe.DirectoryName)\*" -Destination "engine\bin\chromium" -Recurse -Force
 
       - name: Empacotar o programa (PyInstaller)
         shell: powershell

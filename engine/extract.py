@@ -16,13 +16,15 @@ from paths import pdftoppm_cmd, pdfinfo_cmd, tesseract_cmd
 SECTION_TITLE = "ANALISE DOS FUNDOS"  # comparado após normalizar (sem acento, maiúsculo)
 
 # No Windows, evita abrir uma janela de console preta atrás do programa
-# toda vez que chamamos um desses binários.
-_POPEN_FLAGS = {}
+# toda vez que chamamos um desses binários, e evita um bug conhecido do
+# Windows em que um programa sem console (--noconsole) trava a leitura de
+# um processo filho se o stdin não for explicitamente redirecionado.
+_POPEN_FLAGS = {'stdin': subprocess.DEVNULL}
 if sys.platform == 'win32':
     _POPEN_FLAGS['creationflags'] = subprocess.CREATE_NO_WINDOW
 
 def norm(s):
-    return unicodedata.normalize('NFKD', s).encode('ascii', 'ignore').decode().upper()
+    return unicodedata.normalize('NFKD', s or '').encode('ascii', 'ignore').decode().upper()
 
 def page_count(pdf_path):
     out = subprocess.run([pdfinfo_cmd(), pdf_path], capture_output=True, text=True, **_POPEN_FLAGS).stdout

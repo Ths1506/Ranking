@@ -109,13 +109,13 @@ def _classify_color(im_px, W, H, x, y, w, h):
     return 'neutral'
 
 
-def _extract_period_info(lines, warnings):
+def _extract_period_info(clusters, warnings):
     """Acha o rótulo "MMM/AAAA" (ex.: AGO/2026) e a data-base
     (ex.: 31/08/2026) em qualquer lugar da imagem, fora das linhas de
     dados, para preencher o período do ranking automaticamente."""
     label = None
     database = None
-    for toks in lines.values():
+    for toks in clusters:
         for tk in toks:
             t = tk['text'].strip().upper()
             m = re.match(r'^([A-Z]{3})/(\d{4})$', t)
@@ -153,55 +153,60 @@ def extract_indicators(image_path):
     n = len(data['text'])
     im_px = im.load()
 
-    # Agrupa tokens por linha do OCR. O "line_num" do tesseract reinicia a
-    # cada bloco/parágrafo, então a chave precisa incluir block_num/par_num
-    # também (senão o cabeçalho e a 1a linha de dados colidem no mesmo
-    # "line_num=1").
-    lines = {}
+    tokens = []
     for i in range(n):
         t = data['text'][i].strip()
         if not t:
             continue
-        ln = (data['block_num'][i], data['par_num'][i], data['line_num'][i])
-        lines.setdefault(ln, []).append({
+        tokens.append({
             'x': data['left'][i] / SCALE, 'y': data['top'][i] / SCALE,
             'w': data['width'][i] / SCALE, 'h': data['height'][i] / SCALE,
             'text': t,
         })
 
+    # Agrupa os tokens em "linhas" pela posição vertical real na imagem
+    # (topo -> baixo), em vez de confiar no agrupamento block/par/line do
+    # Tesseract. Numa tabela com colunas bem separadas, o Tesseract às
+    # vezes trata cada coluna como um "bloco"/"parágrafo" diferente — nesse
+    # caso, duas palavras da MESMA linha visual (ex.: "Valor" e "12M" do
+    # cabeçalho) caem em block/par/line diferentes e nunca ficam juntas,
+    # fazendo o cabeçalho (e a tabela inteira) nunca ser encontrado, mesmo
+    # a numeração estando "em ordem". Agrupar por proximidade vertical real
+    # resolve isso independente de como o Tesseract organizou blocos.
+    tokens.sort(key=lambda t: t['y'])
+    clusters = []
+    for tk in tokens:
+        if clusters:
+            cl = clusters[-1]
+            cl_y = sum(t['y'] for t in cl) / len(cl)
+            cl_h = sum(t['h'] for t in cl) / len(cl)
+            if abs(tk['y'] - cl_y) <= max(6, cl_h * 0.6):
+                cl.append(tk)
+                continue
+        clusters.append([tk])
+
     warnings = []
-    period_info = _extract_period_info(lines, warnings)
-
-    # Ordena as linhas pela posição vertical real na imagem (topo -> baixo),
-    # em vez de confiar na numeração interna do Tesseract (block/par/line):
-    # essa numeração pode não vir em ordem de leitura em todo Windows/versão
-    # do Tesseract, o que fazia a tabela de indicadores "sumir" mesmo quando
-    # o cabeçalho era encontrado.
-    def _line_y(toks):
-        return sum(t['y'] for t in toks) / len(toks)
-
-    ordered_keys = sorted(lines.keys(), key=lambda ln: _line_y(lines[ln]))
+    period_info = _extract_period_info(clusters, warnings)
 
     # Acha a linha de cabeçalho (tem "Valor" e alguma variação de "Mês"/"12M").
     # Junta o texto da linha inteira antes de checar (em vez de olhar cada
     # palavra isolada), porque o OCR às vezes separa "12M" em dois pedaços
     # ("12" e "M") em vez de ler como um token só.
     header_idx = None
-    header_line = None
-    for idx, ln in enumerate(ordered_keys):
-        toks = lines[ln]
+    header_toks = None
+    for idx, toks in enumerate(clusters):
         texts_up = [tk['text'].upper() for tk in toks]
         joined = ' '.join(texts_up)
         joined_nospace = joined.replace(' ', '')
         if 'VALOR' in joined and '12M' in joined_nospace:
             header_idx = idx
-            header_line = ln
+            header_toks = toks
             break
-    if header_line is None:
+    if header_toks is None:
         warnings.append('Não encontrei o cabeçalho da tabela de indicadores (Indicador/Valor/Mês/Ano/12M); tabela pode ter mudado de layout.')
         return [], warnings, period_info
 
-    header_toks = sorted(lines[header_line], key=lambda t: t['x'])
+    header_toks = sorted(header_toks, key=lambda t: t['x'])
     # Precisa de pelo menos 4 colunas de cabeçalho além de "Indicador"
     col_starts = [tk['x'] for tk in header_toks]
     col_names = [tk['text'].upper() for tk in header_toks]
@@ -219,14 +224,14 @@ def extract_indicators(image_path):
                 idx = i + 1
         return idx
 
-    data_lines = ordered_keys[header_idx + 1:]
+    data_lines = clusters[header_idx + 1:]
     rows_out = []
     for i, (nome, tipo) in enumerate(ROW_TEMPLATE):
         if i >= len(data_lines):
             warnings.append(f'Linha do indicador "{nome}" não encontrada na imagem.')
             rows_out.append({'nome': nome, 'valor': '?', 'mes': '?', 'ano': '?', 'doze_m': '?'})
             continue
-        toks = sorted(lines[data_lines[i]], key=lambda t: t['x'])
+        toks = sorted(data_lines[i], key=lambda t: t['x'])
         by_col = {1: [], 2: [], 3: [], 4: []}
         for tk in toks:
             c = col_of(tk['x'])

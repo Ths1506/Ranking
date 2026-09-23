@@ -15,6 +15,22 @@ KNOWN_SECTIONS = {
 }
 IGNORE_HEADER_WORDS = ('EXTRATO', 'CLIENTE', 'DATA', 'ATIVO', 'ANALISE', 'GALT CAPITAL')
 
+# Páginas com qualquer um destes títulos NÃO são páginas de fundos, mesmo que
+# tenham linhas no formato "texto + número decimal" (ex.: a página de
+# "Extrato Consolidado de Ativos" tem linhas como "Maior rentabilidade da
+# Carteira   5,30%   nov/20", que bate no mesmo padrão de uma linha de fundo).
+# A página inteira é ignorada para não gerar fundos falsos nem entrar por
+# engano no recorte do PDF final.
+def _is_not_fund_page(text):
+    t = norm(text)
+    # ancorado em trechos curtos e bem distintivos (mais resistente a
+    # pequenos erros de OCR do que comparar a frase inteira)
+    if 'CONSOLIDADO DE ATIVOS' in t:
+        return True
+    if 'RISCO' in t and 'RETORNO' in t and 'CARTEIRA' in t:
+        return True
+    return False
+
 def parse_pages(pages_text):
     """pages_text: lista de (numero_pagina, texto_ocr). Retorna lista de
     dicts {sec, fund, mes, ref, ref_label, page}."""
@@ -22,6 +38,8 @@ def parse_pages(pages_text):
     sec = None
     last = None
     for page_num, text in pages_text:
+        if _is_not_fund_page(text):
+            continue
         for line in text.splitlines():
             s = line.strip()
             if not s:

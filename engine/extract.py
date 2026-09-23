@@ -32,15 +32,9 @@ def page_count(pdf_path):
     return int(m.group(1))
 
 def rasterize_page(pdf_path, page_num, workdir, dpi):
-    # prefixo único por chamada (página + dpi) para nunca colidir com
-    # arquivos de uma passada anterior (ex.: a busca rápida a 150 dpi
-    # deixando um "pNN-NN.png" que a passada detalhada a 300 dpi acabaria
-    # reencontrando pelo glob)
     prefix = os.path.join(workdir, f'p{page_num}_{dpi}dpi')
     subprocess.run([pdftoppm_cmd(), '-r', str(dpi), '-f', str(page_num), '-l', str(page_num),
                      '-png', pdf_path, prefix], check=True, **_POPEN_FLAGS)
-    # só o arquivo "cru" gerado agora (nunca um "_r" de rotação de uma
-    # chamada anterior)
     files = sorted(f for f in glob.glob(prefix + '*.png') if not f.endswith('_r.png'))
     if not files:
         raise RuntimeError(f'pdftoppm não gerou imagem para a página {page_num} (prefixo {prefix})')
@@ -60,8 +54,6 @@ def ocr(png_path, psm=6):
     ).stdout
 
 def quick_scan_for_section(pdf_path, workdir, dpi=150):
-    """Passada rápida: OCR em resolução moderada em todas as páginas, só
-    para achar quais contêm o título da seção."""
     n = page_count(pdf_path)
     hits = []
     for pg in range(1, n + 1):
@@ -72,14 +64,14 @@ def quick_scan_for_section(pdf_path, workdir, dpi=150):
             hits.append(pg)
     return n, hits
 
-def contiguous_block(hits):
+def contiguous_block(hits, gap_tolerance=1):
     if not hits:
         return None
     hits = sorted(hits)
     blocks = []
     start = prev = hits[0]
     for h in hits[1:]:
-        if h == prev + 1:
+        if h - prev <= gap_tolerance + 1:
             prev = h
         else:
             blocks.append((start, prev))

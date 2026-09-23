@@ -22,14 +22,27 @@ IGNORE_HEADER_WORDS = ('EXTRATO', 'CLIENTE', 'DATA', 'ATIVO', 'ANALISE', 'GALT C
 # A página inteira é ignorada para não gerar fundos falsos nem entrar por
 # engano no recorte do PDF final.
 def _is_not_fund_page(text):
-    t = norm(text)
-    # ancorado em trechos curtos e bem distintivos (mais resistente a
-    # pequenos erros de OCR do que comparar a frase inteira)
-    if 'CONSOLIDADO DE ATIVOS' in t:
-        return True
-    if 'RISCO' in t and 'RETORNO' in t and 'CARTEIRA' in t:
-        return True
-    return False
+    # IMPORTANTE (descoberto testando com o relatório real da Thais):
+    # "EXTRATO CONSOLIDADO DE ATIVOS" e "Análise dos Fundos & Ativos da
+    # Carteira" são o CABEÇALHO PADRÃO repetido em TODAS as páginas da seção
+    # de fundos — inclusive nas páginas boas, com fundos de verdade. NÃO dá
+    # pra usar essas frases pra excluir página nenhuma (tentei — isso zerou
+    # o relatório inteiro, todas as 8 páginas de fundos reais também têm
+    # esse cabeçalho).
+    # A página que realmente precisa ser excluída é uma página-resumo
+    # ("Rentabilidade (%)" com "Meses acima/abaixo do Benchmark", "Maior/
+    # Menor rentabilidade da Carteira") que vem ANTES da lista de fundos e
+    # não tem nenhum fundo de verdade — só estatísticas da carteira inteira.
+    # Essas frases são bem específicas dessa página-resumo e não aparecem
+    # nas páginas de fundos (confirmado no relatório real de agosto/2026).
+    t = re.sub(r'\s+', ' ', norm(text))
+    markers = (
+        'MESES ACIMA DO BENCHMARK',
+        'MESES ABAIXO DO BENCHMARK',
+        'MAIOR RENTABILIDADE DA CARTEIRA',
+        'MENOR RENTABILIDADE DA CARTEIRA',
+    )
+    return any(marker in t for marker in markers)
 
 def parse_pages(pages_text):
     """pages_text: lista de (numero_pagina, texto_ocr). Retorna lista de

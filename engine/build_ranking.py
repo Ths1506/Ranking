@@ -21,6 +21,8 @@ def _noop(msg):
 
 
 def make_excerpt_pdf(original_pdf, first, last, out_path):
+    """Copia as páginas [first,last] (1-based) do PDF original, gira 90°
+    horário e salva como um novo PDF, sem alterar o arquivo original."""
     reader = PdfReader(original_pdf)
     writer = PdfWriter()
     for i in range(first - 1, last):
@@ -57,6 +59,10 @@ def merge_pdfs(paths, out_path):
 
 
 def build(report_pdf, indicators_image, logo_path, out_dir, progress_cb=None):
+    """Gera o ranking a partir dos dois arquivos do mês. Período, rótulo
+    e data-base são detectados automaticamente a partir da imagem de
+    indicadores. `progress_cb(str)`, se passado, recebe mensagens curtas
+    de status (para a tela de prévia mostrar o andamento)."""
     cb = progress_cb or _noop
     os.makedirs(out_dir, exist_ok=True)
     warnings = []
@@ -77,6 +83,10 @@ def build(report_pdf, indicators_image, logo_path, out_dir, progress_cb=None):
         if not rng:
             raise RuntimeError('Não encontrei o tópico "Análise dos Fundos & Ativos da Carteira" no PDF enviado.')
         first, last = rng
+        # Margem de segurança de 1 página para cada lado: se o OCR rápido
+        # perder o título bem na borda da seção, ainda pegamos a página
+        # certa aqui (seções que não são de fundos já são ignoradas mais
+        # adiante, então ler 1-2 páginas a mais não causa problema).
         first = max(1, first - 1)
         last = min(n, last + 1)
 
@@ -86,9 +96,18 @@ def build(report_pdf, indicators_image, logo_path, out_dir, progress_cb=None):
         res = build_ranking(rows)
         warnings.extend(res['warnings'])
 
+        # O intervalo [first, last] tem uma margem de segurança de 1 página
+        # para não perder fundos numa borda mal lida pelo OCR — mas para o
+        # PDF anexado (cópia das páginas originais), queremos só as páginas
+        # que realmente têm fundos, senão uma página vizinha (de outro
+        # assunto, ex. "Extrato Consolidado de Ativos" da Galt) entra à toa
+        # no anexo. Usamos as páginas de onde os fundos foram lidos de fato.
+        data_pages = sorted(set(r['page'] for r in rows))
+        excerpt_first, excerpt_last = (data_pages[0], data_pages[-1]) if data_pages else (first, last)
+
         cb('Recortando as páginas originais do relatório (girando para a orientação certa)…')
         excerpt_path = os.path.join(wd_detail, 'excerpt.pdf')
-        make_excerpt_pdf(report_pdf, first, last, excerpt_path)
+        make_excerpt_pdf(report_pdf, excerpt_first, excerpt_last, excerpt_path)
 
         cb('Montando o PDF do ranking…')
         ranking_html = build_ranking_pdf_html(res, logo_path, periodo, indicators, indicators_period_label, database)

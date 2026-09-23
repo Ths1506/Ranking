@@ -1,20 +1,37 @@
 """Extração automática (sem digitação manual) da tabela "Fechamento de
 Indicadores" a partir da imagem que a Thais recebe todo mês.
 
-Estratégia (testada e validada com a imagem de agosto/2026):
-  1) Amplia a imagem 6x (LANCZOS) + aumenta contraste/nitidez -> OCR muito
-     mais preciso nos dígitos do que na imagem original (pequena e escura).
-  2) Usa o OCR com posição (bounding box) de cada palavra para separar as
-     colunas (Indicador / Valor / Mês / Ano / 12M) pela posição em X,
-     usando o cabeçalho da própria tabela como referência de coluna.
+Estratégia (testada e validada com imagem pequena/escura E com a imagem
+maior/nítida, formato "cartão", que a Thais manda hoje):
+  1) Redimensiona a imagem para uma largura de trabalho fixa (a imagem que a
+     Thais manda pode vir pequena e escura OU já grande e nítida — a escala
+     se ajusta ao tamanho de entrada) + aumenta contraste/nitidez -> OCR
+     mais preciso nos dígitos.
+  2) NÃO depende de achar o cabeçalho da tabela por OCR: numa imagem "cartão"
+     bem desenhada, o texto branco em negrito do cabeçalho (fundo escuro)
+     às vezes simplesmente não é lido pelo OCR como texto nenhum (testado:
+     em nenhuma variação de escala/contraste o Tesseract conseguiu ler
+     "Indicador/Valor/Mês/Ano/12M" nessa imagem — não é problema de
+     agrupamento, o texto do cabeçalho não sai como texto de jeito nenhum).
+     Em vez disso, ancora pelo nome do primeiro indicador ("Ibovespa"), que
+     o OCR sempre lê bem — e só se não achar esse nome tenta o cabeçalho
+     como método alternativo.
   3) O nome de cada indicador é fixo (Ibovespa, CDI, IPCA, Poupança, Dólar,
      Euro, S&P 500, sempre nessa ordem) -- não depende do OCR acertar
      acentos, então usamos os nomes corretos sempre.
-  4) O sinal (+/-) de cada variação percentual (Mês/Ano/12M) é decidido
+  4) Para separar as 4 colunas numéricas (Valor/Mês/Ano/12M) de cada linha,
+     usa a ORDEM da esquerda para a direita, não uma posição X fixa: pega
+     sempre os 4 últimos "tokens" da linha (da esquerda pra direita) como
+     Valor/Mês/Ano/12M — o que sobra à esquerda é o nome do indicador (que
+     já ignoramos, pois o nome vem da lista fixa) e qualquer lixo de OCR
+     (ex.: emoji da bandeira do S&P 500 às vezes vira um número aleatório
+     colado no nome) — como esse lixo fica à esquerda das 4 colunas reais,
+     nunca entra nas 4 últimas posições.
+  5) O sinal (+/-) de cada variação percentual (Mês/Ano/12M) é decidido
      pela COR do texto na imagem original (vermelho = negativo, verde =
      positivo), não pelo caractere "-" do OCR -- isso evita o erro mais
      comum do OCR nessa imagem, que é "comer" o sinal de menos.
-  5) Os dígitos em si o OCR lê com muita confiabilidade; só a pontuação
+  6) Os dígitos em si o OCR lê com muita confiabilidade; só a pontuação
      (vírgula decimal) costuma sair errada, então reconstruímos a vírgula
      sempre nas duas últimas casas (padrão "X,XX%" do relatório).
 
@@ -25,6 +42,7 @@ digitação).
 import os
 import re
 import sys
+import unicodedata
 import pytesseract
 from PIL import Image, ImageEnhance
 
@@ -33,7 +51,17 @@ from paths import tesseract_cmd
 
 pytesseract.pytesseract.tesseract_cmd = tesseract_cmd()
 
-SCALE = 6
+# Largura de trabalho alvo para o OCR: a imagem de entrada pode vir pequena
+# e escura (~390px, formato antigo) ou já grande e nítida (~1080px, cartão
+# atual) -- a escala se ajusta pra sempre OCRar numa largura parecida com a
+# que foi validada manualmente, em vez de sempre multiplicar por 6 (o que
+# deixava uma imagem já grande enorme demais sem necessidade).
+TARGET_WIDTH = 2340
+MIN_SCALE, MAX_SCALE = 1, 6
+
+
+def _norm_simple(s):
+    return unicodedata.normalize('NFKD', s or '').encode('ascii', 'ignore').decode().upper()
 
 ROW_TEMPLATE = [
     ('Ibovespa', 'points'),
@@ -143,7 +171,8 @@ def _extract_period_info(clusters, warnings):
 def extract_indicators(image_path):
     im = Image.open(image_path).convert('RGB')
     W, H = im.size
-    big_gray = im.resize((W * SCALE, H * SCALE), Image.LANCZOS).convert('L')
+    scale = max(MIN_SCALE, min(MAX_SCALE, round(TARGET_WIDTH / W)))
+    big_gray = im.resize((W * scale, H * scale), Image.LANCZOS).convert('L')
     big_gray = ImageEnhance.Contrast(big_gray).enhance(2.0)
     big_gray = ImageEnhance.Sharpness(big_gray).enhance(2.0)
 
@@ -159,8 +188,8 @@ def extract_indicators(image_path):
         if not t:
             continue
         tokens.append({
-            'x': data['left'][i] / SCALE, 'y': data['top'][i] / SCALE,
-            'w': data['width'][i] / SCALE, 'h': data['height'][i] / SCALE,
+            'x': data['left'][i] / scale, 'y': data['top'][i] / scale,
+            'w': data['width'][i] / scale, 'h': data['height'][i] / scale,
             'text': t,
         })
 
@@ -188,43 +217,34 @@ def extract_indicators(image_path):
     warnings = []
     period_info = _extract_period_info(clusters, warnings)
 
-    # Acha a linha de cabeçalho (tem "Valor" e alguma variação de "Mês"/"12M").
-    # Junta o texto da linha inteira antes de checar (em vez de olhar cada
-    # palavra isolada), porque o OCR às vezes separa "12M" em dois pedaços
-    # ("12" e "M") em vez de ler como um token só.
-    header_idx = None
-    header_toks = None
+    # Acha onde a 1a linha de dados (Ibovespa) começa. É mais confiável do
+    # que achar o cabeçalho: testado com uma imagem "cartão" real onde o
+    # cabeçalho (texto branco em negrito sobre fundo escuro) simplesmente
+    # não sai como texto nenhum do OCR, em nenhuma escala/contraste — mas
+    # o nome "Ibovespa" sempre sai limpo, por ser texto normal.
+    start_idx = None
     for idx, toks in enumerate(clusters):
-        texts_up = [tk['text'].upper() for tk in toks]
-        joined = ' '.join(texts_up)
-        joined_nospace = joined.replace(' ', '')
-        if 'VALOR' in joined and '12M' in joined_nospace:
-            header_idx = idx
-            header_toks = toks
+        joined_norm = _norm_simple(' '.join(tk['text'] for tk in toks))
+        if 'IBOVESPA' in joined_norm.replace(' ', ''):
+            start_idx = idx
             break
-    if header_toks is None:
-        warnings.append('Não encontrei o cabeçalho da tabela de indicadores (Indicador/Valor/Mês/Ano/12M); tabela pode ter mudado de layout.')
+
+    if start_idx is None:
+        # método alternativo: acha a linha de cabeçalho (tem "Valor" e
+        # alguma variação de "Mês"/"12M") e usa a linha seguinte.
+        for idx, toks in enumerate(clusters):
+            texts_up = [tk['text'].upper() for tk in toks]
+            joined = ' '.join(texts_up)
+            joined_nospace = joined.replace(' ', '')
+            if 'VALOR' in joined and '12M' in joined_nospace:
+                start_idx = idx + 1
+                break
+
+    if start_idx is None:
+        warnings.append('Não encontrei a tabela de indicadores na imagem (nem o cabeçalho, nem a linha do Ibovespa); tabela pode ter mudado de layout.')
         return [], warnings, period_info
 
-    header_toks = sorted(header_toks, key=lambda t: t['x'])
-    # Precisa de pelo menos 4 colunas de cabeçalho além de "Indicador"
-    col_starts = [tk['x'] for tk in header_toks]
-    col_names = [tk['text'].upper() for tk in header_toks]
-    # Mapeia para: valor, mes, ano, doze_m (ignora a 1a coluna "Indicador")
-    if len(col_starts) < 5:
-        warnings.append('Cabeçalho da tabela de indicadores incompleto; conferir manualmente.')
-        return [], warnings, period_info
-    bounds = col_starts[1:5]  # início de Valor, Mês, Ano, 12M
-
-    def col_of(x):
-        # 0=nome, 1=valor, 2=mes, 3=ano, 4=doze_m
-        idx = 0
-        for i, b in enumerate(bounds):
-            if x >= b - 8:
-                idx = i + 1
-        return idx
-
-    data_lines = clusters[header_idx + 1:]
+    data_lines = clusters[start_idx:]
     rows_out = []
     for i, (nome, tipo) in enumerate(ROW_TEMPLATE):
         if i >= len(data_lines):
@@ -232,23 +252,28 @@ def extract_indicators(image_path):
             rows_out.append({'nome': nome, 'valor': '?', 'mes': '?', 'ano': '?', 'doze_m': '?'})
             continue
         toks = sorted(data_lines[i], key=lambda t: t['x'])
-        by_col = {1: [], 2: [], 3: [], 4: []}
-        for tk in toks:
-            c = col_of(tk['x'])
-            if c in by_col:
-                by_col[c].append(tk)
 
-        def cell_text(c):
-            return ' '.join(t['text'] for t in by_col[c])
+        # As 4 colunas numéricas (Valor/Mês/Ano/12M) são sempre os 4 últimos
+        # "tokens" da linha, da esquerda pra direita — não uma posição X
+        # fixa. Tudo que sobra à esquerda é o nome do indicador (que a
+        # gente já sabe, vem da lista fixa) e qualquer lixo de OCR (ex.:
+        # emoji da bandeira do S&P 500 às vezes vira um número colado no
+        # nome) — como esse lixo fica à esquerda das 4 colunas de verdade,
+        # nunca entra nas 4 últimas posições.
+        if len(toks) < 4:
+            warnings.append(f'Linha do indicador "{nome}" veio incompleta na leitura da imagem — conferir na prévia.')
+            rows_out.append({'nome': nome, 'valor': '?', 'mes': '?', 'ano': '?', 'doze_m': '?'})
+            continue
+        valor_tk, mes_tk, ano_tk, doze_tk = toks[-4:]
 
-        def cell_sign(c):
-            if not by_col[c]:
-                return 'neutral'
-            tk = by_col[c][0]
+        def cell_text(tk):
+            return tk['text']
+
+        def cell_sign(tk):
             return _classify_color(im_px, W, H, tk['x'], tk['y'], tk['w'], tk['h'])
 
-        raw_valor = cell_text(1)
-        raw_mes, raw_ano, raw_doze = cell_text(2), cell_text(3), cell_text(4)
+        raw_valor = cell_text(valor_tk)
+        raw_mes, raw_ano, raw_doze = cell_text(mes_tk), cell_text(ano_tk), cell_text(doze_tk)
 
         if tipo == 'points':
             valor = _fmt_points(raw_valor) or '?'
@@ -259,9 +284,9 @@ def extract_indicators(image_path):
         else:  # dash_or_percent (IPCA)
             valor = _fmt_decimal(raw_valor, pct=True) if _digits(raw_valor) else '-'
 
-        mes = _fmt_signed_percent(raw_mes, cell_sign(2))
-        ano = _fmt_signed_percent(raw_ano, cell_sign(3))
-        doze_m = _fmt_signed_percent(raw_doze, cell_sign(4))
+        mes = _fmt_signed_percent(raw_mes, cell_sign(mes_tk))
+        ano = _fmt_signed_percent(raw_ano, cell_sign(ano_tk))
+        doze_m = _fmt_signed_percent(raw_doze, cell_sign(doze_tk))
 
         row = {'nome': nome, 'valor': valor, 'mes': mes or '?', 'ano': ano or '?', 'doze_m': doze_m or '?'}
         if '?' in row.values():

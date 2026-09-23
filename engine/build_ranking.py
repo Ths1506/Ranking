@@ -21,8 +21,6 @@ def _noop(msg):
 
 
 def make_excerpt_pdf(original_pdf, first, last, out_path):
-    """Copia as páginas [first,last] (1-based) do PDF original, gira 90°
-    horário e salva como um novo PDF, sem alterar o arquivo original."""
     reader = PdfReader(original_pdf)
     writer = PdfWriter()
     for i in range(first - 1, last):
@@ -34,7 +32,7 @@ def make_excerpt_pdf(original_pdf, first, last, out_path):
 
 
 def render_html_to_pdf(html_str, out_path):
-    with tempfile.NamedTemporaryFile('w', suffix='.html', delete=False) as f:
+    with tempfile.NamedTemporaryFile('w', suffix='.html', delete=False, encoding='utf-8') as f:
         f.write(f'<!doctype html><html><head><meta charset="utf-8"></head><body style="margin:0">{html_str}</body></html>')
         tmp_html = f.name
     from playwright.sync_api import sync_playwright
@@ -59,10 +57,6 @@ def merge_pdfs(paths, out_path):
 
 
 def build(report_pdf, indicators_image, logo_path, out_dir, progress_cb=None):
-    """Gera o ranking a partir dos dois arquivos do mês. Período, rótulo
-    e data-base são detectados automaticamente a partir da imagem de
-    indicadores. `progress_cb(str)`, se passado, recebe mensagens curtas
-    de status (para a tela de prévia mostrar o andamento)."""
     cb = progress_cb or _noop
     os.makedirs(out_dir, exist_ok=True)
     warnings = []
@@ -83,6 +77,8 @@ def build(report_pdf, indicators_image, logo_path, out_dir, progress_cb=None):
         if not rng:
             raise RuntimeError('Não encontrei o tópico "Análise dos Fundos & Ativos da Carteira" no PDF enviado.')
         first, last = rng
+        first = max(1, first - 1)
+        last = min(n, last + 1)
 
         cb(f'Lendo em detalhe as páginas {first} a {last} do relatório…')
         pages_text = detailed_ocr_range(report_pdf, first, last, wd_detail, dpi=300)

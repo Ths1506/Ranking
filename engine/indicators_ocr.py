@@ -1,5 +1,27 @@
 """Extração automática (sem digitação manual) da tabela "Fechamento de
-Indicadores" a partir da imagem que a Thais recebe todo mês."""
+Indicadores" a partir da imagem que a Thais recebe todo mês.
+
+Estratégia (testada e validada com a imagem de agosto/2026):
+  1) Amplia a imagem 6x (LANCZOS) + aumenta contraste/nitidez -> OCR muito
+     mais preciso nos dígitos do que na imagem original (pequena e escura).
+  2) Usa o OCR com posição (bounding box) de cada palavra para separar as
+     colunas (Indicador / Valor / Mês / Ano / 12M) pela posição em X,
+     usando o cabeçalho da própria tabela como referência de coluna.
+  3) O nome de cada indicador é fixo (Ibovespa, CDI, IPCA, Poupança, Dólar,
+     Euro, S&P 500, sempre nessa ordem) -- não depende do OCR acertar
+     acentos, então usamos os nomes corretos sempre.
+  4) O sinal (+/-) de cada variação percentual (Mês/Ano/12M) é decidido
+     pela COR do texto na imagem original (vermelho = negativo, verde =
+     positivo), não pelo caractere "-" do OCR -- isso evita o erro mais
+     comum do OCR nessa imagem, que é "comer" o sinal de menos.
+  5) Os dígitos em si o OCR lê com muita confiabilidade; só a pontuação
+     (vírgula decimal) costuma sair errada, então reconstruímos a vírgula
+     sempre nas duas últimas casas (padrão "X,XX%" do relatório).
+
+Se alguma linha não bater com o esperado, ela entra em `warnings` para
+aparecer marcada na tela de prévia do programa (revisão rápida, não
+digitação).
+"""
 import os
 import re
 import sys
@@ -65,6 +87,9 @@ def _fmt_signed_percent(raw, sign):
 
 
 def _classify_color(im_px, W, H, x, y, w, h):
+    """Cor dominante do token (na imagem original, coordenadas já
+    convertidas), usando os pixels mais saturados da região (o texto),
+    ignorando o fundo cinza/branco."""
     cands = []
     for yy in range(max(0, int(y) - 1), min(H, int(y + h) + 2)):
         for xx in range(max(0, int(x) - 1), min(W, int(x + w) + 2)):
@@ -85,6 +110,9 @@ def _classify_color(im_px, W, H, x, y, w, h):
 
 
 def _extract_period_info(lines, warnings):
+    """Acha o rótulo "MMM/AAAA" (ex.: AGO/2026) e a data-base
+    (ex.: 31/08/2026) em qualquer lugar da imagem, fora das linhas de
+    dados, para preencher o período do ranking automaticamente."""
     label = None
     database = None
     for toks in lines.values():
@@ -125,6 +153,10 @@ def extract_indicators(image_path):
     n = len(data['text'])
     im_px = im.load()
 
+    # Agrupa tokens por linha do OCR. O "line_num" do tesseract reinicia a
+    # cada bloco/parágrafo, então a chave precisa incluir block_num/par_num
+    # também (senão o cabeçalho e a 1a linha de dados colidem no mesmo
+    # "line_num=1").
     lines = {}
     for i in range(n):
         t = data['text'][i].strip()
@@ -140,12 +172,29 @@ def extract_indicators(image_path):
     warnings = []
     period_info = _extract_period_info(lines, warnings)
 
+    # Ordena as linhas pela posição vertical real na imagem (topo -> baixo),
+    # em vez de confiar na numeração interna do Tesseract (block/par/line):
+    # essa numeração pode não vir em ordem de leitura em todo Windows/versão
+    # do Tesseract, o que fazia a tabela de indicadores "sumir" mesmo quando
+    # o cabeçalho era encontrado.
+    def _line_y(toks):
+        return sum(t['y'] for t in toks) / len(toks)
+
+    ordered_keys = sorted(lines.keys(), key=lambda ln: _line_y(lines[ln]))
+
+    # Acha a linha de cabeçalho (tem "Valor" e alguma variação de "Mês"/"12M").
+    # Junta o texto da linha inteira antes de checar (em vez de olhar cada
+    # palavra isolada), porque o OCR às vezes separa "12M" em dois pedaços
+    # ("12" e "M") em vez de ler como um token só.
+    header_idx = None
     header_line = None
-    for ln, toks in lines.items():
+    for idx, ln in enumerate(ordered_keys):
+        toks = lines[ln]
         texts_up = [tk['text'].upper() for tk in toks]
         joined = ' '.join(texts_up)
         joined_nospace = joined.replace(' ', '')
         if 'VALOR' in joined and '12M' in joined_nospace:
+            header_idx = idx
             header_line = ln
             break
     if header_line is None:
@@ -153,21 +202,24 @@ def extract_indicators(image_path):
         return [], warnings, period_info
 
     header_toks = sorted(lines[header_line], key=lambda t: t['x'])
+    # Precisa de pelo menos 4 colunas de cabeçalho além de "Indicador"
     col_starts = [tk['x'] for tk in header_toks]
     col_names = [tk['text'].upper() for tk in header_toks]
+    # Mapeia para: valor, mes, ano, doze_m (ignora a 1a coluna "Indicador")
     if len(col_starts) < 5:
         warnings.append('Cabeçalho da tabela de indicadores incompleto; conferir manualmente.')
         return [], warnings, period_info
-    bounds = col_starts[1:5]
+    bounds = col_starts[1:5]  # início de Valor, Mês, Ano, 12M
 
     def col_of(x):
+        # 0=nome, 1=valor, 2=mes, 3=ano, 4=doze_m
         idx = 0
         for i, b in enumerate(bounds):
             if x >= b - 8:
                 idx = i + 1
         return idx
 
-    data_lines = [ln for ln in sorted(lines) if ln > header_line]
+    data_lines = ordered_keys[header_idx + 1:]
     rows_out = []
     for i, (nome, tipo) in enumerate(ROW_TEMPLATE):
         if i >= len(data_lines):
@@ -199,7 +251,7 @@ def extract_indicators(image_path):
             valor = _fmt_decimal(raw_valor, pct=True) or '?'
         elif tipo == 'decimal_nosign':
             valor = _fmt_decimal(raw_valor, pct=False) or '?'
-        else:
+        else:  # dash_or_percent (IPCA)
             valor = _fmt_decimal(raw_valor, pct=True) if _digits(raw_valor) else '-'
 
         mes = _fmt_signed_percent(raw_mes, cell_sign(2))

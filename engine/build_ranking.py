@@ -20,14 +20,16 @@ def _noop(msg):
     pass
 
 
-def make_excerpt_pdf(original_pdf, first, last, out_path):
-    """Copia as páginas [first,last] (1-based) do PDF original, gira 90°
-    horário e salva como um novo PDF, sem alterar o arquivo original."""
+def make_excerpt_pdf(original_pdf, first, last, out_path, angle=90):
+    """Copia as páginas [first,last] (1-based) do PDF original, gira no
+    sentido horário o ângulo detectado (90° no formato de agosto/2026) e
+    salva como um novo PDF, sem alterar o arquivo original."""
     reader = PdfReader(original_pdf)
     writer = PdfWriter()
     for i in range(first - 1, last):
         page = reader.pages[i]
-        page = page.rotate(90)
+        if angle % 360:
+            page = page.rotate(angle)
         writer.add_page(page)
     with open(out_path, 'wb') as f:
         writer.write(f)
@@ -78,10 +80,15 @@ def build(report_pdf, indicators_image, logo_path, out_dir, progress_cb=None):
 
     with tempfile.TemporaryDirectory() as wd_quick, tempfile.TemporaryDirectory() as wd_detail:
         cb('Procurando a seção "Análise dos Fundos & Ativos da Carteira" no relatório (varredura rápida)…')
-        n, hits = quick_scan_for_section(report_pdf, wd_quick, dpi=150)
+        n, hits, angle = quick_scan_for_section(report_pdf, wd_quick, dpi=150)
         rng = contiguous_block(hits)
         if not rng:
-            raise RuntimeError('Não encontrei o tópico "Análise dos Fundos & Ativos da Carteira" no PDF enviado.')
+            from extract import last_scan_diag
+            amostra = last_scan_diag.get('sample') or '(nenhum texto foi lido)'
+            raise RuntimeError(
+                'Não encontrei o tópico "Análise dos Fundos & Ativos da Carteira" no PDF enviado '
+                f'({n} páginas, testadas em todas as orientações).\n\n'
+                f'Trecho que o programa conseguiu ler: "{amostra}"')
         first, last = rng
         # Margem de segurança de 1 página para cada lado: se o OCR rápido
         # perder o título bem na borda da seção, ainda pegamos a página
@@ -91,7 +98,7 @@ def build(report_pdf, indicators_image, logo_path, out_dir, progress_cb=None):
         last = min(n, last + 1)
 
         cb(f'Lendo em detalhe as páginas {first} a {last} do relatório…')
-        pages_text = detailed_ocr_range(report_pdf, first, last, wd_detail, dpi=300)
+        pages_text = detailed_ocr_range(report_pdf, first, last, wd_detail, dpi=300, angle=angle)
         rows = parse_pages(pages_text)
         res = build_ranking(rows)
         warnings.extend(res['warnings'])
@@ -107,7 +114,7 @@ def build(report_pdf, indicators_image, logo_path, out_dir, progress_cb=None):
 
         cb('Recortando as páginas originais do relatório (girando para a orientação certa)…')
         excerpt_path = os.path.join(wd_detail, 'excerpt.pdf')
-        make_excerpt_pdf(report_pdf, excerpt_first, excerpt_last, excerpt_path)
+        make_excerpt_pdf(report_pdf, excerpt_first, excerpt_last, excerpt_path, angle=angle)
 
         cb('Montando o PDF do ranking…')
         ranking_html = build_ranking_pdf_html(res, logo_path, periodo, indicators, indicators_period_label, database)

@@ -1,24 +1,11 @@
-"""
-Motor de extração: lê o PDF do relatório de posição, encontra as páginas da
-seção "Análise dos Fundos & Ativos da Carteira", corrige a orientação e faz
-OCR de cada página, devolvendo o texto linha a linha por página.
-
-Estratégia em duas passadas para não gastar tempo à toa:
-  1) OCR rápido (150 dpi) em todas as páginas, só para achar o intervalo
-     de páginas da seção pelo título.
-  2) OCR de qualidade (300 dpi) somente nas páginas desse intervalo.
-"""
+"""Motor de extração do relatório de posição (versão 09/10/2026)."""
 import subprocess, re, unicodedata, glob, os, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import pdftoppm_cmd, pdfinfo_cmd, tesseract_cmd
 
-SECTION_TITLE = "ANALISE DOS FUNDOS"  # comparado após normalizar (sem acento, maiúsculo)
+SECTION_TITLE = "ANALISE DOS FUNDOS"
 
-# No Windows, evita abrir uma janela de console preta atrás do programa
-# toda vez que chamamos um desses binários, e evita um bug conhecido do
-# Windows em que um programa sem console (--noconsole) trava a leitura de
-# um processo filho se o stdin não for explicitamente redirecionado.
 _POPEN_FLAGS = {'stdin': subprocess.DEVNULL}
 if sys.platform == 'win32':
     _POPEN_FLAGS['creationflags'] = subprocess.CREATE_NO_WINDOW
@@ -40,17 +27,8 @@ def rasterize_page(pdf_path, page_num, workdir, dpi):
         raise RuntimeError(f'pdftoppm não gerou imagem para a página {page_num} (prefixo {prefix})')
     return files[0]
 
-# Orientações possíveis do relatório, em graus no sentido HORÁRIO que é
-# preciso girar a página para o texto ficar em pé. O relatório de
-# agosto/2026 vinha "deitado" (precisa de 90°), mas o sistema pode exportar
-# o PDF de outro jeito em outro mês (já em pé, ou deitado para o outro
-# lado). Tentamos primeiro 90° (o caso conhecido) e, só se não acharmos a
-# seção, as demais.
 ORIENTATIONS = (90, 0, 270, 180)
 
-# Além do título da seção, a coluna "Ativo/Indexador" só existe nas
-# páginas de fundos — serve de segunda forma de reconhecer a página caso
-# o título venha escrito/lido de outro jeito.
 _COLUMN_MARK = re.compile(r'ATIVO\W{0,3}INDEXADOR')
 
 def is_section_page(text):
@@ -87,7 +65,7 @@ def quick_scan_for_section(pdf_path, workdir, dpi=150):
     n = page_count(pdf_path)
     raws = {}
     _ocr_errors.clear()
-    best_sample, best_score = '', -1  # trecho mais legível, para a mensagem de erro
+    best_sample, best_score = '', -1
     for angle in ORIENTATIONS:
         hits = []
         for pg in range(1, n + 1):
@@ -95,7 +73,7 @@ def quick_scan_for_section(pdf_path, workdir, dpi=150):
                 raws[pg] = rasterize_page(pdf_path, pg, workdir, dpi)
             text = ocr(rotate_image(raws[pg], angle), psm=6)
             compact = ' '.join(text.split())
-            score = len(re.findall(r'[A-Za-zÀ-ÿ]{4,}', compact))  # palavras de verdade
+            score = len(re.findall(r'[A-Za-zÀ-ÿ]{4,}', compact))
             if score > best_score:
                 best_sample, best_score = compact, score
             if is_section_page(text):
@@ -103,4 +81,43 @@ def quick_scan_for_section(pdf_path, workdir, dpi=150):
         if hits:
             return n, hits, angle
         if _ocr_errors and len(_ocr_errors) >= n:
-            # O leitor de texto
+            raise RuntimeError('O leitor de texto (OCR) não conseguiu ler o PDF. Detalhe técnico: ' + _ocr_errors[-1])
+    last_scan_diag['sample'] = best_sample[:160]
+    return n, [], ORIENTATIONS[0]
+
+last_scan_diag = {}
+
+def contiguous_block(hits, gap_tolerance=1):
+    if not hits:
+        return None
+    hits = sorted(hits)
+    blocks = []
+    start = prev = hits[0]
+    for h in hits[1:]:
+        if h - prev <= gap_tolerance + 1:
+            prev = h
+        else:
+            blocks.append((start, prev))
+            start = prev = h
+    blocks.append((start, prev))
+    blocks.sort(key=lambda b: b[1] - b[0], reverse=True)
+    return blocks[0]
+
+def detailed_ocr_range(pdf_path, first, last, workdir, dpi=300, angle=90):
+    pages_text = []
+    for pg in range(first, last + 1):
+        raw = rasterize_page(pdf_path, pg, workdir, dpi)
+        rot = rotate_image(raw, angle)
+        text = ocr(rot, psm=6)
+        pages_text.append((pg, text))
+    return pages_text
+
+if __name__ == '__main__':
+    import sys, tempfile, time
+    pdf_path = sys.argv[1]
+    t0 = time.time()
+    with tempfile.TemporaryDirectory() as wd:
+        n, hits, angle = quick_scan_for_section(pdf_path, wd, dpi=150)
+        rng = contiguous_block(hits)
+        print(f'{n} páginas no total. Orientação: {angle}°. Seção encontrada em: {hits} -> intervalo escolhido {rng}')
+        print('tempo passada rápida: %.1fs' % (time.time() - t0))

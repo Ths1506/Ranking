@@ -1,7 +1,7 @@
 """Extrai as linhas de fundos (nome, seção, valor 'No Mês' e referência) a
 partir do texto OCR das páginas da seção 'Análise dos Fundos & Ativos da
 Carteira'."""
-import re
+import re, difflib
 from extract import norm
 
 NUM = r'-?\d{1,3}(?:\.\d{3})*,\d{2}|--'
@@ -14,6 +14,25 @@ KNOWN_SECTIONS = {
     'FUNDOS RENDA FIXA', 'FUNDOS DI', 'FUNDO DE INFRA', 'INDEXADORES',
 }
 IGNORE_HEADER_WORDS = ('EXTRATO', 'CLIENTE', 'DATA', 'ATIVO', 'ANALISE', 'GALT CAPITAL')
+
+
+def canonical_section(head):
+    """Reconhece o título de seção mesmo com pequenos erros do OCR, que
+    mudam de computador para computador (ex.: 'FUNDOS AGOES', 'Fundos Ações',
+    'FUNDOS AÇõES |', 'INFLAGAO - IPCA'). Devolve o nome padrão da seção
+    (ex.: 'FUNDOS ACOES') ou None se a linha não parece um título conhecido."""
+    t = re.sub(r'[^A-Z\- ]', ' ', norm(head))
+    t = re.sub(r'\s+', ' ', t).strip(' -')
+    if not t or len(t) > 40:
+        return None
+    if t in KNOWN_SECTIONS:
+        return t
+    best, score = None, 0.0
+    for k in KNOWN_SECTIONS:
+        r = difflib.SequenceMatcher(None, t, k).ratio()
+        if r > score:
+            best, score = k, r
+    return best if score >= 0.85 else None
 
 # Páginas com qualquer um destes títulos NÃO são páginas de fundos, mesmo que
 # tenham linhas no formato "texto + número decimal" (ex.: a página de
@@ -63,11 +82,15 @@ def parse_pages(pages_text):
             nums = re.findall(NUM, s)
             head = re.sub(r'\s+', ' ', s)
             m = re.match(r'^(.*?)\s{2,}(-?[\d.]+,\d{2}.*)$', s)
-            if not nums and head.upper() == head and len(head) > 3 and not any(k in head for k in IGNORE_HEADER_WORDS):
-                cand = norm(head)
-                if cand in KNOWN_SECTIONS or len(head) < 40:
-                    sec = head
-                continue
+            if not nums and len(head) > 3 and not any(k in norm(head) for k in IGNORE_HEADER_WORDS):
+                known = canonical_section(head)
+                if known:
+                    sec = known
+                    continue
+                if head.upper() == head:
+                    if len(head) < 40:
+                        sec = head
+                    continue
             if m and len(nums) >= 2:
                 label = re.sub(r'\s+', ' ', m.group(1)).strip()
                 first = nums[0]

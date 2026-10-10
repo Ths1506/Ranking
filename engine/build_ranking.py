@@ -79,6 +79,12 @@ def build(report_pdf, indicators_image, logo_path, out_dir, progress_cb=None):
     month_tag = period_info.get('month_tag', 'sem-data')
 
     with tempfile.TemporaryDirectory() as wd_quick, tempfile.TemporaryDirectory() as wd_detail:
+        # Trabalha numa cópia com nome simples (sem acento/espaço), para o
+        # leitor de PDF não tropeçar no nome ou na pasta do arquivo original.
+        import shutil
+        report_copy = os.path.join(wd_detail, 'relatorio.pdf')
+        shutil.copyfile(report_pdf, report_copy)
+        report_pdf = report_copy
         cb('Procurando a seção "Análise dos Fundos & Ativos da Carteira" no relatório (varredura rápida)…')
         n, hits, angle = quick_scan_for_section(report_pdf, wd_quick, dpi=150)
         rng = contiguous_block(hits)

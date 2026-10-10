@@ -14,8 +14,11 @@ def norm(s):
     return unicodedata.normalize('NFKD', s or '').encode('ascii', 'ignore').decode().upper()
 
 def page_count(pdf_path):
-    out = subprocess.run([pdfinfo_cmd(), pdf_path], capture_output=True, text=True, **_POPEN_FLAGS).stdout
+    out = subprocess.run([pdfinfo_cmd(), pdf_path], capture_output=True, text=True,
+                         encoding='utf-8', errors='replace', **_POPEN_FLAGS).stdout or ''
     m = re.search(r'Pages:\s+(\d+)', out)
+    if not m:
+        raise RuntimeError('Não consegui abrir o PDF do relatório (o arquivo pode estar corrompido ou protegido).')
     return int(m.group(1))
 
 def rasterize_page(pdf_path, page_num, workdir, dpi):
@@ -53,11 +56,11 @@ _ocr_errors = []
 def ocr(png_path, psm=6):
     r = subprocess.run(
         [tesseract_cmd(), png_path, '-', '--psm', str(psm), '-c', 'preserve_interword_spaces=1'],
-        capture_output=True, text=True, **_POPEN_FLAGS
+        capture_output=True, text=True, encoding='utf-8', errors='replace', **_POPEN_FLAGS
     )
     if r.returncode != 0:
         _ocr_errors.append((r.stderr or '').strip()[:300])
-    return r.stdout
+    return r.stdout or ''
 
 def quick_scan_for_section(pdf_path, workdir, dpi=150):
     """Devolve (n_paginas, paginas_da_secao, angulo). Rasteriza cada página

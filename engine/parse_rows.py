@@ -3,6 +3,7 @@ partir do texto OCR das páginas da seção 'Análise dos Fundos & Ativos da
 Carteira'."""
 import re, difflib
 from extract import norm
+from fund_names import official_name
 
 NUM = r'-?\d{1,3}(?:\.\d{3})*,\d{2}|--'
 
@@ -99,7 +100,8 @@ def parse_pages(pages_text):
                         last['ref_label'] = label
                         last['ref'] = first
                 else:
-                    last = {'sec': sec, 'fund': label, 'mes': first, 'page': page_num,
-                            'ref': None, 'ref_label': None}
+                    fund, confirmed = official_name(label)
+                    last = {'sec': sec, 'fund': fund, 'mes': first, 'page': page_num,
+                            'ref': None, 'ref_label': None, 'name_ok': confirmed}
                     rows.append(last)
     return rows

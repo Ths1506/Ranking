@@ -12,7 +12,10 @@ STRATEGY_SECTIONS = {
 }
 STRATEGY_ORDER = ['Renda Fixa CDI', 'Renda Fixa IPCA', 'Multimercado', 'Ações', 'FIDCs']
 
-LB_PATTERN = ('LONG BIASED', ' LB ')  # comparado sobre o nome normalizado, com espaços nas pontas
+# Fundos que ficam FORA de Multimercado, mesmo estando nessa seção do
+# relatório (regra da Thais): Long Biased ("LB") e Long Short.
+# Comparado sobre o nome normalizado (sem acento/pontuação), com espaços nas pontas.
+LB_PATTERN = (' LONG BIASED ', ' LONG BIAS ', ' LB ', ' LONG SHORT ', ' L S ')
 
 
 def to_float(v):
@@ -26,7 +29,8 @@ def is_galt(fund_name):
 
 
 def is_long_biased(fund_name):
-    n = ' ' + norm(fund_name) + ' '
+    import re
+    n = ' ' + re.sub(r'[^A-Z0-9]+', ' ', norm(fund_name)).strip() + ' '
     return any(p in n for p in LB_PATTERN)
 
 
@@ -126,6 +130,12 @@ def build_ranking(rows):
         blocos.append((name, r['items']))
     galt = build_galt(rows)
     counts['Fundos Galt'] = len(galt)
+    # Fundo que vai aparecer no ranking com nome que não está na lista de
+    # nomes oficiais (fund_names.py): avisa para alguém conferir a grafia.
+    for name, items in blocos:
+        for it in items:
+            if it.get('name_ok') is False:
+                warnings.append(f'Conferir a grafia do nome (fundo novo, lido do relatório): "{it["fund"]}" em {name}')
     if len(galt) < 4:
         warnings.append(f'Só {len(galt)} fundos Galt encontrados (esperado: 4 — Sequoia, Jacarandá, FIRF, Talipot)')
     blocos.append(('Fundos Galt', galt))

@@ -42,19 +42,19 @@ def pill(kind):
             f'<td bgcolor="{bg}" style="background-color:{bg};padding:3px 9px;font-family:{SANS};font-size:11px;font-weight:bold;color:{fg};white-space:nowrap;">{txt}</td></tr></table>')
 
 def row_html(it):
-    kind = it['kind']; fund = it['fund']; ret = mes_text(it); ref = ref_text(it)
+    kind = it['kind']; fund = it['fund'].upper(); ret = mes_text(it); ref = ref_text(it)
     b = f'border-bottom:1px solid {LINE};'
     if kind in ('best', 'worst'):
         col = POS if kind == 'best' else NEG
         return (f'<tr><td style="padding:8px 0 8px 10px;{b}" width="84">{pill(kind)}</td>'
-                f'<td style="padding:8px 10px;{b}font-family:{SANS};font-size:13px;font-weight:bold;color:{INK};">{fund}</td>'
+                f'<td style="padding:8px 10px;{b}font-family:{SANS};font-size:13px;font-weight:bold;color:{INK};white-space:nowrap;">{fund}</td>'
                 f'<td align="right" width="70" style="padding:8px 10px;{b}font-family:{SANS};font-size:13px;font-weight:bold;color:{col};white-space:nowrap;">{ret}</td>'
                 f'<td align="right" width="150" style="padding:8px 10px;{b}font-family:{SANS};font-size:12px;font-weight:bold;color:{col};white-space:nowrap;">{ref}</td></tr>')
     if kind == 'galt':
-        return (f'<tr><td colspan="2" bgcolor="{GOLDBG}" style="background-color:{GOLDBG};padding:8px 10px;{b}font-family:{SANS};font-size:13px;font-weight:bold;color:{INK};">{fund}</td>'
+        return (f'<tr><td colspan="2" bgcolor="{GOLDBG}" style="background-color:{GOLDBG};padding:8px 10px;{b}font-family:{SANS};font-size:13px;font-weight:bold;color:{INK};white-space:nowrap;">{fund}</td>'
                 f'<td align="right" width="70" bgcolor="{GOLDBG}" style="background-color:{GOLDBG};padding:8px 10px;{b}font-family:{SANS};font-size:13px;font-weight:bold;color:{GOLDTX};white-space:nowrap;">{ret}</td>'
                 f'<td align="right" width="150" bgcolor="{GOLDBG}" style="background-color:{GOLDBG};padding:8px 10px;{b}font-family:{SANS};font-size:12px;font-weight:bold;color:{GOLDTX};white-space:nowrap;">{ref}</td></tr>')
-    return (f'<tr><td colspan="2" style="padding:8px 10px;{b}font-family:{SANS};font-size:13px;font-weight:bold;color:{INK};">{fund}</td>'
+    return (f'<tr><td colspan="2" style="padding:8px 10px;{b}font-family:{SANS};font-size:13px;font-weight:bold;color:{INK};white-space:nowrap;">{fund}</td>'
             f'<td align="right" width="70" style="padding:8px 10px;{b}font-family:{SANS};font-size:13px;font-weight:bold;color:{INK};white-space:nowrap;">{ret}</td>'
             f'<td align="right" width="150" style="padding:8px 10px;{b}font-family:{SANS};font-size:12px;font-weight:bold;color:{MUTE};white-space:nowrap;">{ref}</td></tr>')
 
@@ -126,12 +126,17 @@ def pdf_pill(kind):
     return '<span class="pl best">&#9650; Melhor</span>' if kind == 'best' else '<span class="pl worst">&#9660; Pior</span>'
 
 def pdf_row(it):
-    kind = it['kind']; fund = it['fund']; ret = mes_text(it); ref = ref_text(it)
+    kind = it['kind']; fund = it['fund'].upper(); ret = mes_text(it); ref = ref_text(it)
     if kind in ('best', 'worst'):
         return f'<div class="r {kind}"><div class="t">{pdf_pill(kind)}</div><div class="f">{fund}</div><div class="n">{ret}</div><div class="x">{ref}</div></div>'
+    # FIDCs e Fundos Galt nunca têm a faixa "Melhor/Pior" (não existe essa
+    # distinção pra eles) — por isso usamos uma variante "wide" sem a coluna
+    # vazia do selo, pra o nome do fundo começar exatamente embaixo do
+    # título da seção (antes ficava recuado, como se tivesse um selo
+    # invisível ali, e não alinhava com "FIDCs"/"FUNDOS GALT" acima).
     if kind == 'galt':
-        return f'<div class="r galt"><div class="t"></div><div class="f">{fund}</div><div class="n">{ret}</div><div class="x">{ref}</div></div>'
-    return f'<div class="r neu"><div class="t"></div><div class="f">{fund}</div><div class="n">{ret}</div><div class="x">{ref}</div></div>'
+        return f'<div class="r galt wide"><div class="f">{fund}</div><div class="n">{ret}</div><div class="x">{ref}</div></div>'
+    return f'<div class="r neu wide"><div class="f">{fund}</div><div class="n">{ret}</div><div class="x">{ref}</div></div>'
 
 def pdf_section(title, gold=False):
     tt = 'FIDCs' if title == 'FIDCs' else title.upper()
@@ -156,6 +161,7 @@ html,body{margin:0;height:100%}
 .s .sl{font:700 2.3mm Arial,sans-serif;letter-spacing:0.2mm;color:#5F6C7A;text-align:right;white-space:nowrap}
 .s.g{color:#9A7020;border-color:#C9A24B}
 .r{display:grid;grid-template-columns:20mm 1fr 17mm 44mm;gap:2mm;align-items:center;padding:1.1mm 1mm;border-bottom:0.2mm solid #DDE2E8;font-size:2.9mm;line-height:3.6mm}
+.r.wide{grid-template-columns:1fr 17mm 44mm}
 .r .f{font-weight:700}
 .r .n{font-weight:700;text-align:right}
 .r .x{font-weight:700;text-align:right;font-size:2.6mm;white-space:nowrap}
